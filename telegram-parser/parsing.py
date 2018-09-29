@@ -47,8 +47,34 @@ def get_userID_by_username(client, message):
 				pass
 	return
 
+
+def get_datum_range(date_from, date_until):
+	db = sql_init()
+	cursor = db.cursor()
+	cursor.execute("SELECT count(ID) from Messages WHERE date >= '%s' and date <= '%s'" % (date_from, date_until))
+	rows = cursor.fetchone()
+	return rows[0]
+
+
+def get_message_range(date_from, date_until):
+	db = sql_init()
+	cursor = db.cursor()
+	cursor.execute("SELECT ID, message from Messages WHERE date >= '%s' and date <= '%s'" % (date_from, date_until))
+	rows = cursor.fetchall()
+	table = 'Messages'
+	for elem in rows:
+		azure_data = get_azure_data(elem[1])
+		if azure_data[0]:
+			sql_push(table, elem[0], 'Language', azure_data[0])
+		sql_push(table, elem[0], 'sentiment', int(azure_data[1]))
+		if azure_data[2]:
+			sql_push(table, elem[0], 'key_phrases', azure_data[2])
+		if azure_data[3]:
+			sql_push(table, elem[0], 'entities', azure_data[3])
+		break
+
 # Функция для работы с SQL
-def sql_push(table, mid, col=0, data=0, tid='ID'):
+def sql_push(table, mid, col=0, data=-1, tid='ID'):
 	db = sql_init()
 	cursor = db.cursor()
 	# Если data строка, обновляем в базе
@@ -57,10 +83,12 @@ def sql_push(table, mid, col=0, data=0, tid='ID'):
 			query = ''' UPDATE %s SET %s = "%s" WHERE %s = %s''' % (table, col, data, tid, mid)
 		else:
 			query = ''' UPDATE %s SET %s = '%s' WHERE %s = %s''' % (table, col, data, tid, mid)
-	elif col and data and isinstance(data, int):
-		query = '''UPDATE %s SET %s = %i WHERE %s = %s''' % (table, col, data, tid, mid)
-	# Если col и data равны нулю - такого ряда в базе еще нет создаем ряд
-	elif not col and not data:
+	elif col and isinstance(data, int):
+		if data >= 0:
+			query = '''UPDATE %s SET %s = %i WHERE %s = %s''' % (table, col, data, tid, mid)
+	# Если col равнен нулю и data -1 - такого ряда в базе еще нет создаем новый ряд
+	# data по умолчанию -1, так как sentiment равен нулю или единице
+	elif not col and data == -1:
 		query = '''INSERT INTO %s(%s) VALUES(%s)''' % (table, tid, mid)
 	else:
 		return
@@ -79,7 +107,7 @@ def parse_participants(client, group):
 	i = 0
 	for user in users:
 		if not user.id in participants:
-			sql_push(table, user.id, 0, 0, uid)
+			sql_push(table, user.id, 0, -1, uid)
 		dates = get_user_seen(user.id)
 		# Если есть значение в кортеже, заносим в базу
 		if dates[1]:
@@ -123,7 +151,7 @@ def parse_messages(client, group, last=20):
 
 			# Следующий блок кода предназначен для работы с azure api
 
-			# azure_data = get_azure_language(message.message) # получаем данные
+			# azure_data = get_azure_data(message.message) # получаем данные
 			# if azure_data[0]:
 			# 	sql_push(table, mid, 'Language', azure_data[0])
 			# sql_push(table, mid, 'sentiment', int(azure_data[1]))
@@ -131,12 +159,12 @@ def parse_messages(client, group, last=20):
 			# 	sql_push(table, mid, 'key_phrases', azure_data[2])
 			# if azure_data[3]:
 			# 	sql_push(table, mid, 'entities', azure_data[3])
-			# break
+
 		if hasattr(message, 'action'):
 			if message.action: # Системные сообщения (добавление пользователя, итп)
 				sql_push(table, mid, 'ServiceAction', str(message.action))
 		if i >= last:
-			print('\r%i')
+			print('\r%i' % i)
 			break
 		print('\r%i' % i, end='')
 		i += 1
